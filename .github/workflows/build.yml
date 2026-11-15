@@ -30,16 +30,24 @@ jobs:
 
       - name: Verify kernel version and configure
         working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
         run: |
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' Makefile | head -3
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- lineageos_mi8937_defconfig
+          make O=out lineageos_mi8937_defconfig
           scripts/config --file out/.config --enable KPROBES --enable KALLSYMS --enable KALLSYMS_ALL
-          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+          make O=out olddefconfig
 
       - name: Build kernel and device trees
         working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
         run: |
-          make -j"$(nproc)" O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image.gz dtbs
+          make -j"$(nproc)" O=out Image.gz dtbs
 
       - name: Collect build output
         run: |
@@ -48,7 +56,7 @@ jobs:
           find kernel/out/arch/arm64/boot/dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) -exec cp --parents {} release/ \;
           cp kernel/out/.config release/kernel.config
           printf 'Source: LineageOS/android_kernel_xiaomi_msm8937@lineage-19.1\nKernel: ' > release/BUILD-INFO.txt
-          make -s -C kernel O=out ARCH=arm64 kernelversion >> release/BUILD-INFO.txt
+          make -s -C kernel O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion >> release/BUILD-INFO.txt
           cat release/BUILD-INFO.txt
 
       - name: Upload kernel artifacts
