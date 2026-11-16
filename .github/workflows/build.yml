@@ -84,6 +84,7 @@ jobs:
             --enable KPROBES \
             --enable KALLSYMS \
             --enable KALLSYMS_ALL \
+            --set-str BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES "msm8937-pmi8950-qrd-land msm8917-pmi8937-qrd-sku5-riva msm8940-pmi8950-qrd-sku7-santoni msm8940-pmi8937-mtp-ugg msm8917-pmi8937-mtp-ugglite msm8917-pmi8937-qrd-sku5-rolex" \
             --set-str LOCALVERSION "-${KERNEL_LOCAL_NAME}-${{ matrix.variant }}" \
             --disable LOCALVERSION_AUTO
 
@@ -109,8 +110,366 @@ jobs:
           grep -q '^CONFIG_MACH_XIAOMI_ROVA=y$' out/.config
           grep -q '^CONFIG_MACH_XIAOMI_SANTONI=y$' out/.config
           grep -q '^CONFIG_MACH_XIAOMI_ULYSSE=y$' out/.config
-          grep -q '^CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y$' out/.config
-          grep -q '^CONFIG_IKCONFIG=y$' out/.config
+          grep -q '^CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y
+          grep -q '^CONFIG_IKCONFIG_PROC=y$' out/.config
+
+          if [ "${{ matrix.ksu }}" = "true" ]; then
+            grep -q '^CONFIG_KSU=y$' out/.config
+            grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' out/.config
+            grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' out/.config
+            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y$' out/.config
+          else
+            ! grep -q '^CONFIG_KSU=y$' out/.config
+          fi
+
+          echo "=== Effective config ==="
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|MACH_XIAOMI_LAND|MACH_XIAOMI_ROVA|MACH_XIAOMI_SANTONI|MACH_XIAOMI_ULYSSE|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build device trees first, then append them to Image.gz-dtb
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Match the known-working Yoru reference toolchain generation.
+          aarch64-linux-gnu-gcc --version | head -n1
+          arm-linux-gnueabi-gcc --version | head -n1
+
+          # IMPORTANT: arm64/boot/Makefile discovers DTBs with find() while
+          # make parses the file. Build DTBs in a separate invocation first,
+          # otherwise Image.gz-dtb can be created before the DTBs exist.
+          make -j"$(nproc)" O=out dtbs
+
+          dtb_dir="out/arch/arm64/boot/dts/qcom"
+          dtb_names=(
+            msm8937-pmi8950-qrd-land.dtb
+            msm8917-pmi8937-qrd-sku5-riva.dtb
+            msm8940-pmi8950-qrd-sku7-santoni.dtb
+            msm8940-pmi8937-mtp-ugg.dtb
+            msm8917-pmi8937-mtp-ugglite.dtb
+            msm8917-pmi8937-qrd-sku5-rolex.dtb
+          )
+          for dtb in "${dtb_names[@]}"; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          # DTB order intentionally matches the known-working Yoru Mi8937 image.
+          # The kernel Makefile otherwise uses filesystem-dependent find() order.
+          make -j"$(nproc)" O=out Image.gz-dtb
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+          # Verify the appended DTB payload byte-for-byte, including order.
+          python3 - <<'PY'
+          from pathlib import Path
+          import zlib
+
+          dtb_dir = Path("out/arch/arm64/boot/dts/qcom")
+          names = [
+              "msm8937-pmi8950-qrd-land.dtb",
+              "msm8917-pmi8937-qrd-sku5-riva.dtb",
+              "msm8940-pmi8950-qrd-sku7-santoni.dtb",
+              "msm8940-pmi8937-mtp-ugg.dtb",
+              "msm8917-pmi8937-mtp-ugglite.dtb",
+              "msm8917-pmi8937-qrd-sku5-rolex.dtb",
+          ]
+
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          if not dec.eof:
+              raise SystemExit("Image.gz stream is incomplete")
+          actual = dec.unused_data
+          expected = b"".join((dtb_dir / name).read_bytes() for name in names)
+
+          if actual != expected:
+              raise SystemExit("Appended DTB bytes/order do not match the Yoru reference order")
+
+          print("Validated Yoru-compatible DTB order:")
+          for name in names:
+              print(" - " + name)
+          PY
+
+      - name: Package AnyKernel3 unified installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          # Pin the exact AnyKernel3 base version used by the supplied Yoru ZIP.
+          git init anykernel
+          git -C anykernel remote add origin https://github.com/osm0sis/AnyKernel3.git
+          git -C anykernel fetch --depth=1 origin 6f88dff82b786e879b255a8e1523547c4f62d031
+          git -C anykernel checkout --detach FETCH_HEAD
+          grep -q 'AK_BASE_VERSION=20250518' anykernel/META-INF/com/google/android/updater-script
+          rm -rf anykernel/.git
+
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=prada
+          device.name6=santoni
+          device.name7=ugglite
+          device.name8=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh;
+
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          : > anykernel/banner
+
+          {
+            echo "Kernel name: flower-kernel-happy-new-year-edition"
+            echo "Variant: ${{ matrix.variant }}"
+            echo "Kernel source: LineageOS/android_kernel_xiaomi_msm8937"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
+            echo "Defconfig: lineageos_mi8937_defconfig"
+            echo "Kernel image: Image.gz-dtb"
+            echo "Device family configuration: MSM8937 / MSM8917 / MSM8940"
+            echo "Xiaomi board configs: LAND, ROVA, SANTONI, ULYSSE"
+            echo "AnyKernel aliases: rolex, riva, rova, land, santoni, ugglite, ugg"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+              echo "KernelSU hook: syscall table tampering + LSM security hooks"
+            else
+              echo "KernelSU: not integrated"
+            fi
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > anykernel/BUILD-INFO.txt
+
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -f "release/$zip_name"
+          test "$(unzip -l "release/$zip_name" | awk '$4 == "banner" {print $1}')" = "0"
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+ out/.config
+          grep -Fq 'CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES="msm8937-pmi8950-qrd-land msm8917-pmi8937-qrd-sku5-riva msm8940-pmi8950-qrd-sku7-santoni msm8940-pmi8937-mtp-ugg msm8917-pmi8937-mtp-ugglite msm8917-pmi8937-qrd-sku5-rolex"' out/.config
+          grep -q '^CONFIG_IKCONFIG=y
+          grep -q '^CONFIG_IKCONFIG_PROC=y$' out/.config
+
+          if [ "${{ matrix.ksu }}" = "true" ]; then
+            grep -q '^CONFIG_KSU=y$' out/.config
+            grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' out/.config
+            grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' out/.config
+            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y$' out/.config
+          else
+            ! grep -q '^CONFIG_KSU=y$' out/.config
+          fi
+
+          echo "=== Effective config ==="
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|MACH_XIAOMI_LAND|MACH_XIAOMI_ROVA|MACH_XIAOMI_SANTONI|MACH_XIAOMI_ULYSSE|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build device trees first, then append them to Image.gz-dtb
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Match the known-working Yoru reference toolchain generation.
+          aarch64-linux-gnu-gcc --version | head -n1
+          arm-linux-gnueabi-gcc --version | head -n1
+
+          # IMPORTANT: arm64/boot/Makefile discovers DTBs with find() while
+          # make parses the file. Build DTBs in a separate invocation first,
+          # otherwise Image.gz-dtb can be created before the DTBs exist.
+          make -j"$(nproc)" O=out dtbs
+
+          dtb_dir="out/arch/arm64/boot/dts/qcom"
+          for dtb in \
+            msm8917-pmi8937-mtp-ugglite.dtb \
+            msm8940-pmi8937-mtp-ugg.dtb \
+            msm8917-pmi8937-qrd-sku5-riva.dtb \
+            msm8917-pmi8937-qrd-sku5-rolex.dtb \
+            msm8937-pmi8950-qrd-land.dtb \
+            msm8940-pmi8950-qrd-sku7-santoni.dtb; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          # Start a fresh make invocation so DTB_OBJS sees the completed DTBs.
+          make -j"$(nproc)" O=out Image.gz-dtb
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+          # Validate that the appended payload really contains all six family DTBs.
+          python3 - <<'PY'
+          import struct
+          import zlib
+          from pathlib import Path
+
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          dtb_payload = dec.unused_data
+
+          magic = bytes.fromhex("d00dfeed")
+          found = []
+          pos = 0
+          while True:
+              pos = dtb_payload.find(magic, pos)
+              if pos < 0:
+                  break
+              if pos + 8 <= len(dtb_payload):
+                  size = struct.unpack(">I", dtb_payload[pos + 4:pos + 8])[0]
+                  if 40 <= size <= len(dtb_payload) - pos:
+                      found.append(dtb_payload[pos:pos + size])
+                      pos += size
+                      continue
+              pos += 4
+
+          if len(found) != 6:
+              raise SystemExit(f"Expected 6 appended Mi8937-family DTBs, found {len(found)}")
+
+          strings = b"".join(found)
+          required = [
+              b"qcom,msm8917-qrd-sku5",
+              b"qcom,msm8937-qrd",
+              b"qcom,msm8940-qrd",
+              b"qcom,msm8917-mtp",
+              b"qcom,msm8940",
+          ]
+          missing = [item.decode() for item in required if item not in strings]
+          if missing:
+              raise SystemExit("Missing required DTB compatibles: " + ", ".join(missing))
+
+          print("Validated six appended DTBs for the Mi8937 family.")
+          PY
+
+      - name: Package AnyKernel3 unified installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+          rm -rf anykernel/.git
+
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          kernel.string=Flower Kernel - Happy New Year Edition
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=santoni
+          device.name6=ugglite
+          device.name7=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh;
+
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          : > anykernel/banner
+
+          {
+            echo "Kernel name: flower-kernel-happy-new-year-edition"
+            echo "Variant: ${{ matrix.variant }}"
+            echo "Kernel source: LineageOS/android_kernel_xiaomi_msm8937"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
+            echo "Defconfig: lineageos_mi8937_defconfig"
+            echo "Kernel image: Image.gz-dtb"
+            echo "Device family configuration: MSM8937 / MSM8917 / MSM8940"
+            echo "Xiaomi board configs: LAND, ROVA, SANTONI, ULYSSE"
+            echo "AnyKernel aliases: rolex, riva, rova, land, santoni, ugglite, ugg"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+              echo "KernelSU hook: syscall table tampering + LSM security hooks"
+            else
+              echo "KernelSU: not integrated"
+            fi
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > anykernel/BUILD-INFO.txt
+
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -f "release/$zip_name"
+          test "$(unzip -l "release/$zip_name" | awk '$4 == "banner" {print $1}')" = "0"
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+ out/.config
           grep -q '^CONFIG_IKCONFIG_PROC=y$' out/.config
 
           if [ "${{ matrix.ksu }}" = "true" ]; then
