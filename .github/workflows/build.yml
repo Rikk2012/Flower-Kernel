@@ -257,7 +257,7 @@ jobs:
             echo "Kernel image: Image.gz-dtb"
             echo "Device family configuration: MSM8937 / MSM8917 / MSM8940"
             echo "Xiaomi board configs: LAND, ROVA, SANTONI, ULYSSE"
-            echo "AnyKernel aliases: rolex, riva, rova, land, santoni, ugglite, ugg"
+            echo "AnyKernel aliases: rolex, riva, rova, land, prada, santoni, ugglite, ugg"
             echo "KernelSU: ${{ matrix.ksu }}"
             if [ "${{ matrix.ksu }}" = "true" ]; then
               echo "KernelSU source: backslashxx/KernelSU"
