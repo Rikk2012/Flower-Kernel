@@ -3,7 +3,7 @@ name: Build Flower Kernel
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [lineage-19.1]
     paths:
       - '.github/workflows/build.yml'
       - 'README.md'
@@ -13,8 +13,9 @@ permissions:
 
 jobs:
   build:
+    name: Build MSM8937 / MSM8917
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Checkout Flower-Kernel
         uses: actions/checkout@v4
@@ -22,11 +23,16 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libssl-dev lz4 make python3
+          sudo apt-get install -y \
+            bc bison build-essential device-tree-compiler flex \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            libelf-dev libncurses-dev libssl-dev lz4 make python3
 
-      - name: Clone LineageOS kernel source
+      - name: Clone LineageOS Xiaomi MSM8937 kernel
         run: |
-          git clone --depth=1 --branch lineage-19.1 https://github.com/LineageOS/android_kernel_xiaomi_msm8937.git kernel
+          git clone --depth=1 --branch lineage-19.1 \
+            https://github.com/LineageOS/android_kernel_xiaomi_msm8937.git kernel
+          echo "KERNEL_COMMIT=$(git -C kernel rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Integrate backslashxx KernelSU
         working-directory: kernel
@@ -35,8 +41,9 @@ jobs:
           test -L drivers/kernelsu
           grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig
           grep -q 'CONFIG_KSU' drivers/kernelsu/Kconfig
+          echo "KSU_COMMIT=$(git -C KernelSU rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Verify kernel version and configure
+      - name: Configure unified MSM8937 / MSM8917 kernel
         working-directory: kernel
         env:
           ARCH: arm64
@@ -45,10 +52,16 @@ jobs:
         run: |
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' Makefile | head -3
           make O=out lineageos_mi8937_defconfig
-          scripts/config --file out/.config --enable KPROBES --enable KALLSYMS --enable KALLSYMS_ALL --enable KSU
+          scripts/config --file out/.config \
+            --enable KPROBES \
+            --enable KALLSYMS \
+            --enable KALLSYMS_ALL \
+            --enable KSU
           make O=out olddefconfig
-          grep -E '^(CONFIG_KSU|CONFIG_KPROBES|CONFIG_KALLSYMS)=' out/.config
+          grep -E '^(CONFIG_(KSU|KPROBES|KALLSYMS|KALLSYMS_ALL|ARCH_MSM8937|ARCH_MSM8917))=' out/.config
           grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^CONFIG_ARCH_MSM8937=y$' out/.config
+          grep -q '^CONFIG_ARCH_MSM8917=y$' out/.config
 
       - name: Build kernel and device trees
         working-directory: kernel
@@ -63,18 +76,33 @@ jobs:
         run: |
           mkdir -p release
           cp kernel/out/arch/arm64/boot/Image.gz release/
-          find kernel/out/arch/arm64/boot/dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) -exec cp --parents {} release/ \;
+          if [ -d kernel/out/arch/arm64/boot/dts ]; then
+            cd kernel/out/arch/arm64/boot
+            find dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) \
+              -exec cp --parents {} "$GITHUB_WORKSPACE/release/" \;
+            cd "$GITHUB_WORKSPACE"
+          fi
           cp kernel/out/.config release/kernel.config
-          printf 'Source: LineageOS/android_kernel_xiaomi_msm8937@lineage-19.1\nKernelSU: backslashxx/KernelSU@' > release/BUILD-INFO.txt
-          git -C kernel/KernelSU describe --tags --always >> release/BUILD-INFO.txt
-          printf 'Kernel: ' >> release/BUILD-INFO.txt
-          make -s -C kernel O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion >> release/BUILD-INFO.txt
+          {
+            echo "Kernel source: LineageOS/android_kernel_xiaomi_msm8937"
+            echo "Kernel branch: lineage-19.1"
+            echo "Kernel commit: $KERNEL_COMMIT"
+            echo "Defconfig: lineageos_mi8937_defconfig"
+            echo "Architecture: arm64"
+            echo "SoC config: MSM8937 + MSM8917"
+            echo "KernelSU source: backslashxx/KernelSU"
+            echo "KernelSU commit: $KSU_COMMIT"
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > release/BUILD-INFO.txt
           cat release/BUILD-INFO.txt
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Flower-Kernel-riva-lineage-19.1
+          name: Flower-Kernel-MSM8937-MSM8917-lineage-19.1
           path: release/
           if-no-files-found: error
           retention-days: 14
