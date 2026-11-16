@@ -170,7 +170,7 @@ jobs:
           dec.decompress(image)
           dtb_payload = dec.unused_data
 
-          magic = b"\\xd0\\x0d\\xfe\\xed"
+          magic = bytes.fromhex("d00dfeed")
           found = []
           pos = 0
           while True:
@@ -188,7 +188,7 @@ jobs:
           if len(found) != 6:
               raise SystemExit(f"Expected 6 appended Mi8937-family DTBs, found {len(found)}")
 
-          strings = b"\\n".join(found)
+          strings = b"".join(found)
           required = [
               b"qcom,msm8917-qrd-sku5",
               b"qcom,msm8937-qrd",
