@@ -14,7 +14,7 @@ permissions:
 jobs:
   build:
     name: Mi8937 Unified - ${{ matrix.variant }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -125,16 +125,83 @@ jobs:
           echo "=== Effective config ==="
           grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|MACH_XIAOMI_LAND|MACH_XIAOMI_ROVA|MACH_XIAOMI_SANTONI|MACH_XIAOMI_ULYSSE|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
 
-      - name: Build Image.gz-dtb and device trees
+      - name: Build device trees first, then append them to Image.gz-dtb
         working-directory: kernel
         env:
           ARCH: arm64
           CROSS_COMPILE: aarch64-linux-gnu-
           CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
         run: |
           set -euxo pipefail
-          make -j"$(nproc)" O=out Image.gz-dtb dtbs
+
+          # Match the known-working Yoru reference toolchain generation.
+          aarch64-linux-gnu-gcc --version | head -n1
+          arm-linux-gnueabi-gcc --version | head -n1
+
+          # IMPORTANT: arm64/boot/Makefile discovers DTBs with find() while
+          # make parses the file. Build DTBs in a separate invocation first,
+          # otherwise Image.gz-dtb can be created before the DTBs exist.
+          make -j"$(nproc)" O=out dtbs
+
+          dtb_dir="out/arch/arm64/boot/dts/qcom"
+          for dtb in \
+            msm8917-pmi8937-mtp-ugglite.dtb \
+            msm8940-pmi8937-mtp-ugg.dtb \
+            msm8917-pmi8937-qrd-sku5-riva.dtb \
+            msm8917-pmi8937-qrd-sku5-rolex.dtb \
+            msm8937-pmi8950-qrd-land.dtb \
+            msm8940-pmi8950-qrd-sku7-santoni.dtb; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          # Start a fresh make invocation so DTB_OBJS sees the completed DTBs.
+          make -j"$(nproc)" O=out Image.gz-dtb
           test -s out/arch/arm64/boot/Image.gz-dtb
+
+          # Validate that the appended payload really contains all six family DTBs.
+          python3 - <<'PY'
+          import struct
+          import zlib
+          from pathlib import Path
+
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          dtb_payload = dec.unused_data
+
+          magic = b"\\xd0\\x0d\\xfe\\xed"
+          found = []
+          pos = 0
+          while True:
+              pos = dtb_payload.find(magic, pos)
+              if pos < 0:
+                  break
+              if pos + 8 <= len(dtb_payload):
+                  size = struct.unpack(">I", dtb_payload[pos + 4:pos + 8])[0]
+                  if 40 <= size <= len(dtb_payload) - pos:
+                      found.append(dtb_payload[pos:pos + size])
+                      pos += size
+                      continue
+              pos += 4
+
+          if len(found) != 6:
+              raise SystemExit(f"Expected 6 appended Mi8937-family DTBs, found {len(found)}")
+
+          strings = b"\\n".join(found)
+          required = [
+              b"qcom,msm8917-qrd-sku5",
+              b"qcom,msm8937-qrd",
+              b"qcom,msm8940-qrd-sku7",
+              b"qcom,msm8917-mtp",
+              b"qcom,msm8940-mtp",
+          ]
+          missing = [item.decode() for item in required if item not in strings]
+          if missing:
+              raise SystemExit("Missing required DTB compatibles: " + ", ".join(missing))
+
+          print("Validated six appended DTBs for the Mi8937 family.")
+          PY
 
       - name: Package AnyKernel3 unified installer
         shell: bash
