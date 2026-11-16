@@ -48,7 +48,8 @@ jobs:
           scripts/config --file out/.config --enable KPROBES --enable KALLSYMS --enable KALLSYMS_ALL --enable KSU
           make O=out olddefconfig
           grep -E '^(CONFIG_KSU|CONFIG_KPROBES|CONFIG_KALLSYMS)=' out/.config
-          grep -q '^CONFIG_KSU=y
+          grep -q '^CONFIG_KSU=y$' out/.config
+
       - name: Build kernel and device trees
         working-directory: kernel
         env:
@@ -67,34 +68,6 @@ jobs:
           printf 'Source: LineageOS/android_kernel_xiaomi_msm8937@lineage-19.1\nKernelSU: backslashxx/KernelSU@' > release/BUILD-INFO.txt
           git -C kernel/KernelSU describe --tags --always >> release/BUILD-INFO.txt
           printf 'Kernel: ' >> release/BUILD-INFO.txt
-          make -s -C kernel O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion >> release/BUILD-INFO.txt
-          cat release/BUILD-INFO.txt
-
-      - name: Upload kernel artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Flower-Kernel-riva-lineage-19.1
-          path: release/
-          if-no-files-found: error
-          retention-days: 14
- out/.config
-
-      - name: Build kernel and device trees
-        working-directory: kernel
-        env:
-          ARCH: arm64
-          CROSS_COMPILE: aarch64-linux-gnu-
-          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
-        run: |
-          make -j"$(nproc)" O=out Image.gz dtbs
-
-      - name: Collect build output
-        run: |
-          mkdir -p release
-          cp kernel/out/arch/arm64/boot/Image.gz release/
-          find kernel/out/arch/arm64/boot/dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) -exec cp --parents {} release/ \;
-          cp kernel/out/.config release/kernel.config
-          printf 'Source: LineageOS/android_kernel_xiaomi_msm8937@lineage-19.1\nKernel: ' > release/BUILD-INFO.txt
           make -s -C kernel O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion >> release/BUILD-INFO.txt
           cat release/BUILD-INFO.txt
 
