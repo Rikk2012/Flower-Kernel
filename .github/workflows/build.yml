@@ -110,7 +110,8 @@ jobs:
           grep -q '^CONFIG_MACH_XIAOMI_ROVA=y$' out/.config
           grep -q '^CONFIG_MACH_XIAOMI_SANTONI=y$' out/.config
           grep -q '^CONFIG_MACH_XIAOMI_ULYSSE=y$' out/.config
-          grep -q '^CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y
+          grep -q '^CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y$' out/.config
+          grep -Fq 'CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES="msm8937-pmi8950-qrd-land msm8917-pmi8937-qrd-sku5-riva msm8940-pmi8950-qrd-sku7-santoni msm8940-pmi8937-mtp-ugg msm8917-pmi8937-mtp-ugglite msm8917-pmi8937-qrd-sku5-rolex"' out/.config
           grep -q '^CONFIG_IKCONFIG_PROC=y$' out/.config
 
           if [ "${{ matrix.ksu }}" = "true" ]; then
