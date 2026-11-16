@@ -1,38 +1,30 @@
 # Flower-Kernel
 
-Kernel build automation for **Xiaomi Redmi 5A (riva)**, based on the unified
-LineageOS MSM8937 kernel source.
+GitHub Actions build setup for the unified Xiaomi Qualcomm **MSM8937 / MSM8917** kernel family.
 
-## Build target
+## Build configuration
 
-- Source: [LineageOS/android_kernel_xiaomi_msm8937](https://github.com/LineageOS/android_kernel_xiaomi_msm8937)
-- Branch: \`lineage-19.1\`
-- Kernel base reported by the source Makefile: Linux **4.9.337**
-- Defconfig: \`lineageos_mi8937_defconfig\`
-- Architecture: ARM64
-- KernelSU: integrated using [backslashxx/KernelSU](https://github.com/backslashxx/KernelSU)
-  and its \`kernel/setup.sh\` script; the script checks out the latest available tag.
-- Build options: \`CONFIG_KSU=y\`, \`CONFIG_KPROBES=y\`, \`CONFIG_KALLSYMS=y\`,
-  and \`CONFIG_KALLSYMS_ALL=y\`.
+- Build repository: `Rikk2012/Flower-Kernel`
+- Workflow branch: `lineage-19.1`
+- Kernel source: [LineageOS/android_kernel_xiaomi_msm8937](https://github.com/LineageOS/android_kernel_xiaomi_msm8937)
+- Kernel source branch: `lineage-19.1`
+- Kernel version in that source branch: Linux `4.9.337`
+- Architecture: `arm64`
+- Defconfig: `lineageos_mi8937_defconfig`
+- SoC configuration: enables both `CONFIG_ARCH_MSM8937` and `CONFIG_ARCH_MSM8917`
+- KernelSU: [backslashxx/KernelSU](https://github.com/backslashxx/KernelSU), integrated with its `kernel/setup.sh` script.
 
-The existing kernel source, defconfig, and local version naming are retained.
+The unified Mi8937 defconfig is used because the LineageOS source contains both MSM8937 and MSM8917 platform support. This is a shared platform kernel build, not a guarantee that one output is interchangeable across every device: each device still needs matching DTBs, device configuration, vendor modules, and boot-image packaging.
 
-## Run a build
+## Run the build
 
-1. Open the **Actions** tab in this repository.
+1. Open the repository's **Actions** tab.
 2. Select **Build Flower Kernel**.
-3. Press **Run workflow** and confirm the \`main\` branch.
-4. When the run completes, open the run and download the artifact
-   \`Flower-Kernel-riva-lineage-19.1\`.
+3. Choose **Run workflow** on branch `lineage-19.1`.
+4. Download the artifact named `Flower-Kernel-MSM8937-MSM8917-lineage-19.1`.
 
-The artifact contains \`Image.gz\`, compiled device-tree blobs (when produced),
-the final kernel config, and build information including the KernelSU revision.
+The artifact contains `Image.gz`, available DTB/DTBO outputs, the final kernel config, and build metadata including the exact kernel and KernelSU commits.
 
 ## Important
 
-This workflow currently produces kernel build artifacts, **not a flashable
-boot.img or recovery ZIP**. Do not flash the raw \`Image.gz\` directly from
-recovery. A device-specific packaging step and testing on the Redmi 5A are
-still required. KernelSU integration compiling successfully does not by itself
-prove that all KernelSU features work at runtime or that the kernel is safe to
-flash. Keep a backup of the stock boot image before testing.
+This workflow produces kernel build artifacts only. It does **not** create a device-specific flashable `boot.img` or recovery ZIP. Do not flash `Image.gz` directly. Device-specific boot-image packaging and testing are separate steps; preserve a known-good boot image before any device testing.
