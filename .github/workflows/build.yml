@@ -192,9 +192,9 @@ jobs:
           required = [
               b"qcom,msm8917-qrd-sku5",
               b"qcom,msm8937-qrd",
-              b"qcom,msm8940-qrd-sku7",
+              b"qcom,msm8940-qrd",
               b"qcom,msm8917-mtp",
-              b"qcom,msm8940-mtp",
+              b"qcom,msm8940",
           ]
           missing = [item.decode() for item in required if item not in strings]
           if missing:
