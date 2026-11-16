@@ -1,4 +1,4 @@
-name: Build Flower Kernel
+name: Build Flower Kernel (Mi8937 Unified)
 
 on:
   workflow_dispatch:
@@ -13,12 +13,21 @@ permissions:
 
 jobs:
   build:
-    name: MSM8937 / MSM8917
+    name: Mi8937 Unified - ${{ matrix.variant }}
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: KSU
+            ksu: true
+          - variant: No-KSU
+            ksu: false
     env:
       KERNEL_LOCAL_NAME: flower-kernel-happy-new-year-edition
       KERNEL_SOURCE_BRANCH: lineage-19.1
+
     steps:
       - name: Checkout Flower-Kernel
         uses: actions/checkout@v4
@@ -29,7 +38,7 @@ jobs:
           sudo apt-get install -y \
             bc bison build-essential device-tree-compiler flex \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-            libelf-dev libncurses-dev libssl-dev lz4 make python3
+            libelf-dev libncurses-dev libssl-dev lz4 make python3 zip
 
       - name: Clone LineageOS kernel source
         run: |
@@ -40,20 +49,22 @@ jobs:
           git -C kernel log -1 --oneline
 
       - name: Integrate backslashxx KernelSU
+        if: matrix.ksu
         working-directory: kernel
         shell: bash
         run: |
           set -euxo pipefail
           curl -fsSL https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh | bash
 
-          # The setup script adds drivers/kernelsu as a symlink to KernelSU/kernel.
           test -L drivers/kernelsu
           test -f drivers/kernelsu/Kconfig
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           grep -q '^config KSU$' drivers/kernelsu/Kconfig
+          grep -q '^config KSU_TAMPER_SYSCALL_TABLE$' drivers/kernelsu/Kconfig
+          grep -q '^config KSU_LSM_SECURITY_HOOKS$' drivers/kernelsu/Kconfig
 
           echo "KSU_COMMIT=$(git -C KernelSU rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "KernelSU integrated successfully."
+          echo "KernelSU integration verified."
 
       - name: Configure kernel
         working-directory: kernel
@@ -61,27 +72,60 @@ jobs:
           ARCH: arm64
           CROSS_COMPILE: aarch64-linux-gnu-
           CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
         run: |
           set -euxo pipefail
           make O=out lineageos_mi8937_defconfig
 
+          # Match the Yoru reference where supported by this KernelSU fork.
           scripts/config --file out/.config \
+            --enable IKCONFIG \
+            --enable IKCONFIG_PROC \
             --enable KPROBES \
             --enable KALLSYMS \
             --enable KALLSYMS_ALL \
-            --enable KSU \
-            --set-str LOCALVERSION "-${KERNEL_LOCAL_NAME}" \
+            --set-str LOCALVERSION "-${KERNEL_LOCAL_NAME}-${{ matrix.variant }}" \
             --disable LOCALVERSION_AUTO
+
+          if [ "${{ matrix.ksu }}" = "true" ]; then
+            scripts/config --file out/.config \
+              --enable KSU \
+              --enable KSU_TAMPER_SYSCALL_TABLE \
+              --enable KSU_LSM_SECURITY_HOOKS \
+              --enable KSU_FEATURE_ADBROOT \
+              --enable KSU_HEURISTIC_IN_TREE_BUILD \
+              --disable KSU_HACK_ARM64_BRANCH_LINK
+          else
+            scripts/config --file out/.config --disable KSU
+          fi
 
           make O=out olddefconfig
 
-          grep -E '^(CONFIG_(KSU|KPROBES|KALLSYMS|KALLSYMS_ALL|ARCH_MSM8937|ARCH_MSM8917))=' out/.config
-          grep -q '^CONFIG_KSU=y$' out/.config
           grep -q '^CONFIG_ARCH_MSM8937=y$' out/.config
           grep -q '^CONFIG_ARCH_MSM8917=y$' out/.config
-          grep -Fq "CONFIG_LOCALVERSION=\"-${KERNEL_LOCAL_NAME}\"" out/.config
+          grep -q '^CONFIG_ARCH_MSM8940=y$' out/.config
+          grep -q '^CONFIG_MACH_XIAOMI=y$' out/.config
+          grep -q '^CONFIG_MACH_XIAOMI_LAND=y$' out/.config
+          grep -q '^CONFIG_MACH_XIAOMI_ROVA=y$' out/.config
+          grep -q '^CONFIG_MACH_XIAOMI_SANTONI=y$' out/.config
+          grep -q '^CONFIG_MACH_XIAOMI_ULYSSE=y$' out/.config
+          grep -q '^CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y$' out/.config
+          grep -q '^CONFIG_IKCONFIG=y$' out/.config
+          grep -q '^CONFIG_IKCONFIG_PROC=y$' out/.config
 
-      - name: Build kernel and device trees
+          if [ "${{ matrix.ksu }}" = "true" ]; then
+            grep -q '^CONFIG_KSU=y$' out/.config
+            grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' out/.config
+            grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' out/.config
+            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y$' out/.config
+          else
+            ! grep -q '^CONFIG_KSU=y$' out/.config
+          fi
+
+          echo "=== Effective config ==="
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|MACH_XIAOMI_LAND|MACH_XIAOMI_ROVA|MACH_XIAOMI_SANTONI|MACH_XIAOMI_ULYSSE|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build Image.gz-dtb and device trees
         working-directory: kernel
         env:
           ARCH: arm64
@@ -89,43 +133,94 @@ jobs:
           CROSS_COMPILE_ARM32: arm-linux-gnueabi-
         run: |
           set -euxo pipefail
-          make -j"$(nproc)" O=out Image.gz dtbs
+          make -j"$(nproc)" O=out Image.gz-dtb dtbs
+          test -s out/arch/arm64/boot/Image.gz-dtb
 
-      - name: Collect build output
+      - name: Package AnyKernel3 unified installer
+        shell: bash
         run: |
           set -euxo pipefail
           mkdir -p release
-          cp kernel/out/arch/arm64/boot/Image.gz release/
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+          rm -rf anykernel/.git
 
-          if [ -d kernel/out/arch/arm64/boot/dts ]; then
-            cd kernel/out/arch/arm64/boot
-            find dts -type f \( -name '*.dtb' -o -name '*.dtbo' \) \
-              -exec cp --parents {} "$GITHUB_WORKSPACE/release/" \;
-            cd "$GITHUB_WORKSPACE"
-          fi
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          kernel.string=Flower Kernel - Happy New Year Edition
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=santoni
+          device.name6=ugglite
+          device.name7=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
 
-          cp kernel/out/.config release/kernel.config
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh;
+
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          : > anykernel/banner
+
           {
-            echo "Kernel local name: $KERNEL_LOCAL_NAME"
+            echo "Kernel name: flower-kernel-happy-new-year-edition"
+            echo "Variant: ${{ matrix.variant }}"
             echo "Kernel source: LineageOS/android_kernel_xiaomi_msm8937"
-            echo "LineageOS source branch: $KERNEL_SOURCE_BRANCH"
-            echo "Kernel commit: $KERNEL_COMMIT"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
             echo "Defconfig: lineageos_mi8937_defconfig"
-            echo "Architecture: arm64"
-            echo "SoC support: MSM8937 / MSM8917 (as enabled by upstream defconfig)"
-            echo "KernelSU: backslashxx/KernelSU"
-            echo "KernelSU commit: $KSU_COMMIT"
+            echo "Kernel image: Image.gz-dtb"
+            echo "Device family configuration: MSM8937 / MSM8917 / MSM8940"
+            echo "Xiaomi board configs: LAND, ROVA, SANTONI, ULYSSE"
+            echo "AnyKernel aliases: rolex, riva, rova, land, santoni, ugglite, ugg"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+              echo "KernelSU hook: syscall table tampering + LSM security hooks"
+            else
+              echo "KernelSU: not integrated"
+            fi
             printf 'Kernel version: '
             make -s -C kernel O=out ARCH=arm64 \
               CROSS_COMPILE=aarch64-linux-gnu- \
               CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
-          } > release/BUILD-INFO.txt
-          cat release/BUILD-INFO.txt
+          } > anykernel/BUILD-INFO.txt
 
-      - name: Upload kernel artifacts
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -f "release/$zip_name"
+          test "$(unzip -l "release/$zip_name" | awk '$4 == "banner" {print $1}')" = "0"
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flower-kernel-happy-new-year-edition
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
           path: release/
           if-no-files-found: error
           retention-days: 14
