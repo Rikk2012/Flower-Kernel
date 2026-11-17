@@ -120,7 +120,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          curl -fsSL https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh | bash 9339aca9339574361f32672c67601f7377b20cda
+          curl -fsSL https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh | bash -s -- 9339aca9339574361f32672c67601f7377b20cda
           test -L drivers/kernelsu
           test -f drivers/kernelsu/Kconfig
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig
