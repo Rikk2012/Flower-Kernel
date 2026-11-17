@@ -106,6 +106,7 @@ jobs:
           ccflags-y += $(INCS)
           ccflags-y += -I$(src)/CORE/DXE/inc -I$(src)/CORE/DXE/src
           ccflags-y += -I$(src)/CORE/WDI/WPAL/inc
+          ccflags-y += -I$(src)/CORE/VOSS/inc
           PRIMA_KBUILD
           fi
 
