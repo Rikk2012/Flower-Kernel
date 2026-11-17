@@ -24,7 +24,7 @@ jobs:
           - variant: No-KSU
             ksu: false
     env:
-      KERNEL_LOCAL_NAME: "Flower Kernel"
+      KERNEL_LOCAL_NAME: Flower-Kernel
       KERNEL_LOCALVERSION: Flower-Kernel
       KERNEL_SOURCE_BRANCH: mithorium/a14/master
 
@@ -61,41 +61,39 @@ jobs:
               "https://github.com/Mi-Thorium/$repo.git" "$dir"
           }
 
-          # Device trees: both directories are required by arch/arm64/boot/dts/Makefile.
-          clone_dep kernel_devicetree_xiaomi-msm8937 \
-            dts/mi8937/4.9/master dts_mi8937
-          clone_dep kernel_devicetree_xiaomi-sdm439 \
-            dts/mi439/4.9/master dts_sdm439
+          # Install manifest projects at their official in-tree destinations.
+          # cp -a preserves relative symlinks while making them resolve from the
+          # exact paths used by the MiThorium repo manifest.
+          install_dep() {
+            local source="$1" destination="$2"
+            rm -rf "$destination"
+            mkdir -p "$destination"
+            cp -a "$source/." "$destination/"
+          }
 
-          # Techpacks: xiaomi-sdm439 is required by techpack/Kconfig even for msm8937_defconfig.
-          clone_dep kernel_techpack_xiaomi-msm8937 \
-            techpack/mi8937/4.9/master techpack_mi8937
-          clone_dep kernel_techpack_xiaomi-sdm439 \
-            techpack/mi439/4.9/master techpack_sdm439
-          clone_dep kernel_techpack_audio-legacy \
-            audio/4.9/mithorium/master techpack_audio
-          clone_dep kernel_techpack_camera-legacy \
-            camera/LA.UM.8.6.r1-05300-89xx.0/4.9/mithorium techpack_camera
-          clone_dep kernel_techpack_camera-legacy \
-            camera/LA.UM.5.3-10610-89xx.0/4.9/mithorium techpack_camera_m
-          clone_dep vendor_qcom_opensource_wlan_prima \
-            wlan/LA.UM.9.6.4/mithorium/master prima
+          install_dep dts_mi8937 kernel/arch/arm64/boot/dts/xiaomi-msm8937
+          install_dep dts_sdm439 kernel/arch/arm64/boot/dts/xiaomi-sdm439
+          install_dep techpack_mi8937 kernel/techpack/xiaomi-msm8937
+          install_dep techpack_sdm439 kernel/techpack/xiaomi-sdm439
+          install_dep techpack_audio kernel/techpack/audio-legacy
+          install_dep techpack_camera kernel/techpack/camera-legacy
+          install_dep techpack_camera_m kernel/techpack/camera-legacy-m
+          install_dep prima kernel/drivers/staging/prima
 
-          rm -rf kernel/arch/arm64/boot/dts/xiaomi-msm8937 kernel/arch/arm64/boot/dts/xiaomi-sdm439
-          ln -s "$GITHUB_WORKSPACE/dts_mi8937" kernel/arch/arm64/boot/dts/xiaomi-msm8937
-          ln -s "$GITHUB_WORKSPACE/dts_sdm439" kernel/arch/arm64/boot/dts/xiaomi-sdm439
+          # The Prima tree's legacy EXTRA_CFLAGS are not sufficient for this
+          # in-tree build; pass its collected include directories via ccflags-y.
+          if ! grep -qF 'ccflags-y += $(INCS)' kernel/drivers/staging/prima/Kbuild; then
+            cat >> kernel/drivers/staging/prima/Kbuild <<'PRIMA_KBUILD'
+          # Flower-Kernel: export the vendor WLAN include paths to in-tree Kbuild.
+          ccflags-y += $(INCS)
+          ccflags-y += -I$(src)/CORE/DXE/inc -I$(src)/CORE/DXE/src
+          PRIMA_KBUILD
+          fi
 
-          mkdir -p kernel/techpack kernel/drivers/staging
-          for entry in audio-legacy camera-legacy camera-legacy-m xiaomi-msm8937 xiaomi-sdm439; do
-            rm -rf "kernel/techpack/$entry"
-          done
-          ln -s "$GITHUB_WORKSPACE/techpack_audio" kernel/techpack/audio-legacy
-          ln -s "$GITHUB_WORKSPACE/techpack_camera" kernel/techpack/camera-legacy
-          ln -s "$GITHUB_WORKSPACE/techpack_camera_m" kernel/techpack/camera-legacy-m
-          ln -s "$GITHUB_WORKSPACE/techpack_mi8937" kernel/techpack/xiaomi-msm8937
-          ln -s "$GITHUB_WORKSPACE/techpack_sdm439" kernel/techpack/xiaomi-sdm439
-          rm -rf kernel/drivers/staging/prima
-          ln -s "$GITHUB_WORKSPACE/prima" kernel/drivers/staging/prima
+          test -e kernel/techpack/audio-legacy/include/soc/internal.h
+          test -f kernel/drivers/staging/prima/CORE/DXE/inc/wlan_qct_dxe.h
+          test -f kernel/drivers/staging/prima/CORE/DXE/src/wlan_qct_dxe.c
+
 
           # Fail here with a clear message if any source-manifest Kconfig is absent.
           test -f kernel/techpack/xiaomi-msm8937/Kconfig
@@ -120,7 +118,11 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          curl -fsSL https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh | bash -s -- 9339aca9339574361f32672c67601f7377b20cda
+          KSU_PIN=9339aca9339574361f32672c67601f7377b20cda
+          curl -fsSL "https://raw.githubusercontent.com/backslashxx/KernelSU/$KSU_PIN/kernel/setup.sh" -o "$RUNNER_TEMP/ksu-setup.sh"
+          chmod +x "$RUNNER_TEMP/ksu-setup.sh"
+          sh "$RUNNER_TEMP/ksu-setup.sh" "$KSU_PIN"
+          test "$(git -C KernelSU rev-parse HEAD)" = "$KSU_PIN"
           test -L drivers/kernelsu
           test -f drivers/kernelsu/Kconfig
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig
@@ -141,15 +143,22 @@ jobs:
         run: |
           set -euxo pipefail
 
-          # The MiThorium manifest includes both MSM8937 and SDM439 techpacks.
+          # Use the official MiThorium performance defconfig and matching fragments.
           test -f techpack/xiaomi-sdm439/Kconfig
-          make O=out msm8937_defconfig
+          make O=out vendor/msm8937-perf_defconfig
 
           scripts/kconfig/merge_config.sh -m -O out out/.config \
             arch/arm64/configs/vendor/common.config \
+            arch/arm64/configs/vendor/feature/android-12.config \
+            arch/arm64/configs/vendor/feature/erofs.config \
+            arch/arm64/configs/vendor/feature/exfat.config \
+            arch/arm64/configs/vendor/feature/kprobes.config \
+            arch/arm64/configs/vendor/feature/lmkd.config \
+            arch/arm64/configs/vendor/feature/uclamp.config \
             arch/arm64/configs/vendor/xiaomi/msm8937/common.config \
             arch/arm64/configs/vendor/xiaomi/msm8937/mi8917.config \
-            arch/arm64/configs/vendor/xiaomi/msm8937/mi8937.config
+            arch/arm64/configs/vendor/xiaomi/msm8937/mi8937.config \
+            arch/arm64/configs/vendor/xiaomi/msm8937/riva.config
 
           scripts/config --file out/.config \
             --enable IKCONFIG \
@@ -308,7 +317,7 @@ jobs:
             echo "SDM439 DTS commit: $SDM439_DTS_COMMIT"
             echo "SDM439 techpack commit: $SDM439_TECHPACK_COMMIT"
             echo "DTS order: land, riva, santoni, ugg, ugglite, rolex, prada"
-            echo "Defconfig: msm8937_defconfig + MiThorium unified fragments"
+            echo "Defconfig: vendor/msm8937-perf_defconfig + MiThorium MSM8917/MSM8937 fragments"
             echo "Device family: MSM8917 / MSM8937 / MSM8940"
             echo "Compiler: GCC 13.3.0"
             echo "KPROBES: enabled"
