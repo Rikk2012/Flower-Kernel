@@ -24,7 +24,7 @@ jobs:
           - variant: No-KSU
             ksu: false
     env:
-      KERNEL_LOCAL_NAME: flower-kernel-happy-new-year-edition
+      KERNEL_LOCAL_NAME: Flower-Kernel
       KERNEL_SOURCE_BRANCH: mithorium/a14/master
 
     steps:
@@ -36,6 +36,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             bc bison build-essential device-tree-compiler flex \
+            gcc-13-aarch64-linux-gnu gcc-13-arm-linux-gnueabi \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
             libelf-dev libncurses-dev libssl-dev lz4 make python3 zip
 
@@ -121,6 +122,9 @@ jobs:
             --enable KPROBES \
             --enable KALLSYMS \
             --enable KALLSYMS_ALL \
+            --enable PREEMPT \
+            --enable HZ_100 \
+            --enable FTRACE \
             --set-str BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES "xiaomi-msm8937/land xiaomi-msm8937/prada xiaomi-msm8937/riva xiaomi-msm8937/rolex xiaomi-msm8937/santoni xiaomi-msm8937/ugg xiaomi-msm8937/ugglite" \
             --set-str LOCALVERSION "-${KERNEL_LOCAL_NAME}-${{ matrix.variant }}" \
             --disable LOCALVERSION_AUTO
@@ -155,10 +159,10 @@ jobs:
           grep -q '^CONFIG_IKCONFIG_PROC=y$' out/.config
 
           if [ "${{ matrix.ksu }}" = "true" ]; then
-            grep -q '^CONFIG_KSU=y$' out/.config
+            grep -q '^CONFIG_KSU=y
             grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' out/.config
             grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' out/.config
-            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y$' out/.config
+            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y
           else
             ! grep -q '^CONFIG_KSU=y$' out/.config
           fi
@@ -175,8 +179,13 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          # Select the Yoru-matched GCC 13 cross compilers (Ubuntu 24.04 package version 13.3.0).
+          sudo ln -sf /usr/bin/aarch64-linux-gnu-gcc-13 /usr/local/bin/aarch64-linux-gnu-gcc
+          sudo ln -sf /usr/bin/aarch64-linux-gnu-g++-13 /usr/local/bin/aarch64-linux-gnu-g++
+          sudo ln -sf /usr/bin/arm-linux-gnueabi-gcc-13 /usr/local/bin/arm-linux-gnueabi-gcc
           aarch64-linux-gnu-gcc --version | head -n1
           arm-linux-gnueabi-gcc --version | head -n1
+          test "$(aarch64-linux-gnu-gcc -dumpfullversion)" = "13.3.0"
 
           make -j"$(nproc)" O=out dtbs
           dtb_dir="out/arch/arm64/boot/dts/xiaomi-msm8937"
@@ -252,7 +261,153 @@ jobs:
           AKSCRIPT
 
           cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
-          : > anykernel/banner
+          cp "$GITHUB_WORKSPACE/banner" anykernel/banner
+          test -s anykernel/banner
+          {
+            echo "Kernel name: Flower-Kernel"
+            echo "Variant: ${{ matrix.variant }}"
+            echo "Kernel source: Mi-Thorium/kernel_msm-4.9"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
+            echo "DTS source: Mi-Thorium/kernel_devicetree_xiaomi-msm8937"
+            echo "DTS order: land, prada, riva, rolex, santoni, ugg, ugglite"
+            echo "Defconfig: msm8937_defconfig + MiThorium unified fragments"
+            echo "Device family: MSM8917 / MSM8937 / MSM8940"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            echo "Compiler: GCC 13.3.0"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+            else
+              echo "KernelSU: not integrated"
+            fi
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > anykernel/BUILD-INFO.txt
+
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -f "release/$zip_name"
+          unzip -p "release/$zip_name" banner > release/banner-check
+          cmp "$GITHUB_WORKSPACE/banner" release/banner-check
+          rm release/banner-check
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+ out/.config
+            grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' out/.config
+            grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' out/.config
+            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y$' out/.config
+          else
+            ! grep -q '^CONFIG_KSU=y$' out/.config
+          fi
+
+          echo "=== MiThorium effective config ==="
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build MiThorium unified DTBs and Image.gz-dtb
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Select the Yoru-matched GCC 13 cross compilers (Ubuntu 24.04 package version 13.3.0).
+          sudo ln -sf /usr/bin/aarch64-linux-gnu-gcc-13 /usr/local/bin/aarch64-linux-gnu-gcc
+          sudo ln -sf /usr/bin/aarch64-linux-gnu-g++-13 /usr/local/bin/aarch64-linux-gnu-g++
+          sudo ln -sf /usr/bin/arm-linux-gnueabi-gcc-13 /usr/local/bin/arm-linux-gnueabi-gcc
+          aarch64-linux-gnu-gcc --version | head -n1
+          arm-linux-gnueabi-gcc --version | head -n1
+          test "$(aarch64-linux-gnu-gcc -dumpfullversion)" = "13.3.0"
+
+          make -j"$(nproc)" O=out dtbs
+          dtb_dir="out/arch/arm64/boot/dts/xiaomi-msm8937"
+          dtb_names=(land.dtb prada.dtb riva.dtb rolex.dtb santoni.dtb ugg.dtb ugglite.dtb)
+          for dtb in "${dtb_names[@]}"; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          make -j"$(nproc)" O=out Image.gz-dtb
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zlib
+
+          dtb_dir = Path("out/arch/arm64/boot/dts/xiaomi-msm8937")
+          names = ["land.dtb", "prada.dtb", "riva.dtb", "rolex.dtb", "santoni.dtb", "ugg.dtb", "ugglite.dtb"]
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          if not dec.eof:
+              raise SystemExit("Image.gz stream is incomplete")
+          actual = dec.unused_data
+          expected = b"".join((dtb_dir / name).read_bytes() for name in names)
+          if actual != expected:
+              raise SystemExit("Appended DTB payload/order does not match MiThorium DTS list")
+          print("Validated MiThorium DTB order:", ", ".join(names))
+          PY
+
+      - name: Package AnyKernel3 installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          git init anykernel
+          git -C anykernel remote add origin https://github.com/osm0sis/AnyKernel3.git
+          git -C anykernel fetch --depth=1 origin 6f88dff82b786e879b255a8e1523547c4f62d031
+          git -C anykernel checkout --detach FETCH_HEAD
+          grep -q 'AK_BASE_VERSION=20250518' anykernel/META-INF/com/google/android/updater-script
+          rm -rf anykernel/.git
+
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=prada
+          device.name6=santoni
+          device.name7=ugglite
+          device.name8=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          cp "$GITHUB_WORKSPACE/banner" anykernel/banner
+          test -s anykernel/banner
           {
             echo "Kernel name: flower-kernel-happy-new-year-edition"
             echo "Variant: ${{ matrix.variant }}"
@@ -279,7 +434,294 @@ jobs:
           zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
           (cd anykernel && zip -qr "../release/$zip_name" .)
           test -f "release/$zip_name"
-          test "$(unzip -l "release/$zip_name" | awk '$4 == "banner" {print $1}')" = "0"
+          unzip -p "release/$zip_name" banner > release/banner-check
+          cmp "$GITHUB_WORKSPACE/banner" release/banner-check
+          rm release/banner-check
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+ out/.config
+          else
+            ! grep -q '^CONFIG_KSU=y$' out/.config
+          fi
+
+          echo "=== MiThorium effective config ==="
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build MiThorium unified DTBs and Image.gz-dtb
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Select the Yoru-matched GCC 13 cross compilers (Ubuntu 24.04 package version 13.3.0).
+          sudo ln -sf /usr/bin/aarch64-linux-gnu-gcc-13 /usr/local/bin/aarch64-linux-gnu-gcc
+          sudo ln -sf /usr/bin/aarch64-linux-gnu-g++-13 /usr/local/bin/aarch64-linux-gnu-g++
+          sudo ln -sf /usr/bin/arm-linux-gnueabi-gcc-13 /usr/local/bin/arm-linux-gnueabi-gcc
+          aarch64-linux-gnu-gcc --version | head -n1
+          arm-linux-gnueabi-gcc --version | head -n1
+          test "$(aarch64-linux-gnu-gcc -dumpfullversion)" = "13.3.0"
+
+          make -j"$(nproc)" O=out dtbs
+          dtb_dir="out/arch/arm64/boot/dts/xiaomi-msm8937"
+          dtb_names=(land.dtb prada.dtb riva.dtb rolex.dtb santoni.dtb ugg.dtb ugglite.dtb)
+          for dtb in "${dtb_names[@]}"; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          make -j"$(nproc)" O=out Image.gz-dtb
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zlib
+
+          dtb_dir = Path("out/arch/arm64/boot/dts/xiaomi-msm8937")
+          names = ["land.dtb", "prada.dtb", "riva.dtb", "rolex.dtb", "santoni.dtb", "ugg.dtb", "ugglite.dtb"]
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          if not dec.eof:
+              raise SystemExit("Image.gz stream is incomplete")
+          actual = dec.unused_data
+          expected = b"".join((dtb_dir / name).read_bytes() for name in names)
+          if actual != expected:
+              raise SystemExit("Appended DTB payload/order does not match MiThorium DTS list")
+          print("Validated MiThorium DTB order:", ", ".join(names))
+          PY
+
+      - name: Package AnyKernel3 installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          git init anykernel
+          git -C anykernel remote add origin https://github.com/osm0sis/AnyKernel3.git
+          git -C anykernel fetch --depth=1 origin 6f88dff82b786e879b255a8e1523547c4f62d031
+          git -C anykernel checkout --detach FETCH_HEAD
+          grep -q 'AK_BASE_VERSION=20250518' anykernel/META-INF/com/google/android/updater-script
+          rm -rf anykernel/.git
+
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=prada
+          device.name6=santoni
+          device.name7=ugglite
+          device.name8=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          cp "$GITHUB_WORKSPACE/banner" anykernel/banner
+          test -s anykernel/banner
+          {
+            echo "Kernel name: flower-kernel-happy-new-year-edition"
+            echo "Variant: ${{ matrix.variant }}"
+            echo "Kernel source: Mi-Thorium/kernel_msm-4.9"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
+            echo "DTS source: Mi-Thorium/kernel_devicetree_xiaomi-msm8937"
+            echo "DTS order: land, prada, riva, rolex, santoni, ugg, ugglite"
+            echo "Defconfig: msm8937_defconfig + MiThorium unified fragments"
+            echo "Device family: MSM8917 / MSM8937 / MSM8940"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+            else
+              echo "KernelSU: not integrated"
+            fi
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > anykernel/BUILD-INFO.txt
+
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -f "release/$zip_name"
+          unzip -p "release/$zip_name" banner > release/banner-check
+          cmp "$GITHUB_WORKSPACE/banner" release/banner-check
+          rm release/banner-check
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+ out/.config
+            grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' out/.config
+            grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' out/.config
+            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y$' out/.config
+          else
+            ! grep -q '^CONFIG_KSU=y$' out/.config
+          fi
+
+          echo "=== MiThorium effective config ==="
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build MiThorium unified DTBs and Image.gz-dtb
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # Select the Yoru-matched GCC 13 cross compilers (Ubuntu 24.04 package version 13.3.0).
+          sudo ln -sf /usr/bin/aarch64-linux-gnu-gcc-13 /usr/local/bin/aarch64-linux-gnu-gcc
+          sudo ln -sf /usr/bin/aarch64-linux-gnu-g++-13 /usr/local/bin/aarch64-linux-gnu-g++
+          sudo ln -sf /usr/bin/arm-linux-gnueabi-gcc-13 /usr/local/bin/arm-linux-gnueabi-gcc
+          aarch64-linux-gnu-gcc --version | head -n1
+          arm-linux-gnueabi-gcc --version | head -n1
+          test "$(aarch64-linux-gnu-gcc -dumpfullversion)" = "13.3.0"
+
+          make -j"$(nproc)" O=out dtbs
+          dtb_dir="out/arch/arm64/boot/dts/xiaomi-msm8937"
+          dtb_names=(land.dtb prada.dtb riva.dtb rolex.dtb santoni.dtb ugg.dtb ugglite.dtb)
+          for dtb in "${dtb_names[@]}"; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          make -j"$(nproc)" O=out Image.gz-dtb
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zlib
+
+          dtb_dir = Path("out/arch/arm64/boot/dts/xiaomi-msm8937")
+          names = ["land.dtb", "prada.dtb", "riva.dtb", "rolex.dtb", "santoni.dtb", "ugg.dtb", "ugglite.dtb"]
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          if not dec.eof:
+              raise SystemExit("Image.gz stream is incomplete")
+          actual = dec.unused_data
+          expected = b"".join((dtb_dir / name).read_bytes() for name in names)
+          if actual != expected:
+              raise SystemExit("Appended DTB payload/order does not match MiThorium DTS list")
+          print("Validated MiThorium DTB order:", ", ".join(names))
+          PY
+
+      - name: Package AnyKernel3 installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          git init anykernel
+          git -C anykernel remote add origin https://github.com/osm0sis/AnyKernel3.git
+          git -C anykernel fetch --depth=1 origin 6f88dff82b786e879b255a8e1523547c4f62d031
+          git -C anykernel checkout --detach FETCH_HEAD
+          grep -q 'AK_BASE_VERSION=20250518' anykernel/META-INF/com/google/android/updater-script
+          rm -rf anykernel/.git
+
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=prada
+          device.name6=santoni
+          device.name7=ugglite
+          device.name8=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          cp "$GITHUB_WORKSPACE/banner" anykernel/banner
+          test -s anykernel/banner
+          {
+            echo "Kernel name: flower-kernel-happy-new-year-edition"
+            echo "Variant: ${{ matrix.variant }}"
+            echo "Kernel source: Mi-Thorium/kernel_msm-4.9"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
+            echo "DTS source: Mi-Thorium/kernel_devicetree_xiaomi-msm8937"
+            echo "DTS order: land, prada, riva, rolex, santoni, ugg, ugglite"
+            echo "Defconfig: msm8937_defconfig + MiThorium unified fragments"
+            echo "Device family: MSM8917 / MSM8937 / MSM8940"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+            else
+              echo "KernelSU: not integrated"
+            fi
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > anykernel/BUILD-INFO.txt
+
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -f "release/$zip_name"
+          unzip -p "release/$zip_name" banner > release/banner-check
+          cmp "$GITHUB_WORKSPACE/banner" release/banner-check
+          rm release/banner-check
           cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
           cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
           ls -lh release/
