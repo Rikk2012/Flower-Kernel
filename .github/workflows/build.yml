@@ -98,6 +98,14 @@ jobs:
           install_dep techpack_camera_m kernel/techpack/camera-legacy-m
           install_dep prima kernel/drivers/staging/prima
 
+          # Prima is a Linux kernel driver, not a userspace program. Its
+          # vendor VOSS header incorrectly includes the libc string.h header;
+          # use the kernel string API header so memcmp/memset resolve correctly.
+          sed -i 's|^#include <string.h>|#include <linux/string.h>|' \
+            kernel/drivers/staging/prima/CORE/VOSS/inc/vos_types.h
+          grep -qF '#include <linux/string.h>' \
+            kernel/drivers/staging/prima/CORE/VOSS/inc/vos_types.h
+
           # The Prima tree's legacy EXTRA_CFLAGS are not sufficient for this
           # in-tree build; pass its collected include directories via ccflags-y.
           if ! grep -qF 'ccflags-y += $(INCS)' kernel/drivers/staging/prima/Kbuild; then
