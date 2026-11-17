@@ -1,53 +1,50 @@
 # Flower-Kernel
 
-GitHub Actions build for the Xiaomi Mi8937 device family.
+GitHub Actions build for the Xiaomi Mi8937 unified device family, using the official MiThorium Linux 4.9.337 source manifest.
 
 ## Build configuration
 
-- Workflow repository branch: `main`
-- Kernel source: [LineageOS/android_kernel_xiaomi_msm8937](https://github.com/LineageOS/android_kernel_xiaomi_msm8937)
-- Kernel source branch: `lineage-19.1`
-- Kernel version: Linux 4.9.337 (from the selected source branch)
-- Defconfig: `lineageos_mi8937_defconfig`
+- Kernel source: [Mi-Thorium/kernel_msm-4.9](https://github.com/Mi-Thorium/kernel_msm-4.9)
+- Source branch: `mithorium/a14/master`
+- Kernel version: Linux 4.9.337
+- Defconfig: `msm8937_defconfig` plus MiThorium Xiaomi MSM8937 fragments
 - Architecture: ARM64
-- Kernel local name: `flower-kernel-happy-new-year-edition`
-- Two build variants: KernelSU and No-KSU
-- Installer: AnyKernel3, containing `Image.gz-dtb`
+- Cross compiler: GCC 13.3.0 (matching the Yoru reference toolchain)
+- Kernel image: `Image.gz-dtb`
+- Installer: AnyKernel3, pinned to `6f88dff82b786e879b255a8e1523547c4f62d031`
+- Boot layout: non-A/B `boot`, using AnyKernel3 `dump_boot` / `write_boot`
 
-## Device-family scope
+## Device scope
 
-The source defconfig enables these Xiaomi board configurations:
+The uploaded banner is included verbatim in each installer. Device trees built and appended are:
 
-- `LAND` — Redmi 3S family
-- `ROVA` — Redmi 4A / Redmi 5A unified board (standard/non-Oreo Riva DTB selection)
-- `SANTONI` — Redmi 4X
-- `ULYSSE` — Redmi Note 5A family
+- `land` — Redmi 3S / 3X
+- `prada` — Redmi 4 Standard
+- `riva` — Redmi 5A
+- `rolex` — Redmi 4A
+- `santoni` — Redmi 4X
+- `ugg` — Redmi Note 5A / Y1 Prime
+- `ugglite` — Redmi Note 5A / Y1 Lite
 
-The AnyKernel device-check aliases are: `rolex`, `riva`, `rova`, `land`, `santoni`, `ugglite`, and `ugg`.
+AnyKernel aliases additionally include `rova` for the Riva board naming used by ROMs. Aliases only gate installation; they do not guarantee compatibility with every ROM or bootloader.
 
-**Important limitations:** `prada` is intentionally not listed because this LineageOS source's Xiaomi Kconfig has no Prada board option/DTB selection. The separate `MACH_XIAOMI_RIVA_OREO` option is not enabled because the source Kconfig documents that it removes Redmi 4A support; therefore this unified build must not be assumed compatible with the Riva Oreo-bootloader variant. Device aliases in AnyKernel only gate the installer; they do not prove hardware compatibility.
+## Variants
 
-## KernelSU variant
+The workflow currently builds:
+- `KSU` — backslashxx KernelSU with syscall-table tampering, LSM security hooks, ADB root, and in-tree build detection.
+- `No-KSU` — no KernelSU integration.
 
-The KSU build uses backslashxx/KernelSU and enables the options supported by its Kconfig:
-- `CONFIG_KSU=y`
-- `CONFIG_KSU_TAMPER_SYSCALL_TABLE=y`
-- `CONFIG_KSU_LSM_SECURITY_HOOKS=y`
-- `CONFIG_KSU_FEATURE_ADBROOT=y`
+The Yoru reference's `CONFIG_KSU_FEATURE_SULOG` is not present in the current backslashxx KernelSU Kconfig, so the workflow does not force an unknown option. A separate CPU+GPU overclock build is not advertised until a verified Mi8937-specific overclock patch is available; the Yoru reference's packaging/config details do not provide validated OC tables for this MiThorium source.
 
-The No-KSU build does not integrate KernelSU.
-
-Both variants enable embedded kernel config (`IKCONFIG` and `IKCONFIG_PROC`) and build `Image.gz-dtb` plus the configured device trees.
-
-## Run
+## Build
 
 1. Open **Actions**.
 2. Select **Build Flower Kernel (Mi8937 Unified)**.
 3. Run the workflow on `main`.
-4. Download the corresponding `Flower-Kernel-Mi8937-KSU` or `Flower-Kernel-Mi8937-No-KSU` artifact.
+4. Download the `Flower-Kernel-Mi8937-KSU` or `Flower-Kernel-Mi8937-No-KSU` artifact.
 
-Each artifact includes an AnyKernel ZIP, the effective `.config`, and build metadata. The ZIP contains an empty root-level file named `banner`, ready for your own text.
+Each artifact contains the AnyKernel ZIP, effective kernel config, and build metadata. The installer contains the supplied non-empty `banner` file.
 
-## Compatibility and testing
+## Validation
 
-A successful compile or a matching AnyKernel device alias does not guarantee that a kernel will boot on every ROM or bootloader. The build has not been boot-tested across the listed devices. Keep a device-matched stock boot image available and verify the exact bootloader/DTB/vendor-module combination before any test.
+The workflow checks the kernel version, required board configs, all seven DTB outputs, the appended DTB payload/order, and the banner bytes in the ZIP. A successful compile is not a boot test; the package has not been boot-tested across all listed devices.
