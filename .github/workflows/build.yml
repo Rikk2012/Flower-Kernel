@@ -61,6 +61,24 @@ jobs:
               "https://github.com/Mi-Thorium/$repo.git" "$dir"
           }
 
+          # DTS and techpacks from the mithorium-4.9 repo manifest.
+          clone_dep kernel_devicetree_xiaomi-msm8937 \
+            dts/mi8937/4.9/master dts_mi8937
+          clone_dep kernel_devicetree_xiaomi-sdm439 \
+            dts/mi439/4.9/master dts_sdm439
+          clone_dep kernel_techpack_xiaomi-msm8937 \
+            techpack/mi8937/4.9/master techpack_mi8937
+          clone_dep kernel_techpack_xiaomi-sdm439 \
+            techpack/mi439/4.9/master techpack_sdm439
+          clone_dep kernel_techpack_audio-legacy \
+            audio/4.9/mithorium/master techpack_audio
+          clone_dep kernel_techpack_camera-legacy \
+            camera/LA.UM.8.6.r1-05300-89xx.0/4.9/mithorium techpack_camera
+          clone_dep kernel_techpack_camera-legacy \
+            camera/LA.UM.5.3-10610-89xx.0/4.9/mithorium techpack_camera_m
+          clone_dep vendor_qcom_opensource_wlan_prima \
+            wlan/LA.UM.9.6.4/mithorium/master prima
+
           # Install manifest projects at their official in-tree destinations.
           # cp -a preserves relative symlinks while making them resolve from the
           # exact paths used by the MiThorium repo manifest.
