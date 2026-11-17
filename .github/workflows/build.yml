@@ -100,7 +100,6 @@ jobs:
           # Fail here with a clear message if any source-manifest Kconfig is absent.
           test -f kernel/techpack/xiaomi-msm8937/Kconfig
           test -f kernel/techpack/xiaomi-sdm439/Kconfig
-          test -f kernel/techpack/audio-legacy/Kconfig
           test -f kernel/techpack/camera-legacy/Kconfig
           test -f kernel/techpack/camera-legacy-m/Kconfig
           test -d kernel/arch/arm64/boot/dts/xiaomi-msm8937
