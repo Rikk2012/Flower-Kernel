@@ -105,6 +105,7 @@ jobs:
           # Flower-Kernel: export the vendor WLAN include paths to in-tree Kbuild.
           ccflags-y += $(INCS)
           ccflags-y += -I$(src)/CORE/DXE/inc -I$(src)/CORE/DXE/src
+          ccflags-y += -I$(src)/CORE/WDI/WPAL/inc
           PRIMA_KBUILD
           fi
 
