@@ -24,7 +24,8 @@ jobs:
           - variant: No-KSU
             ksu: false
     env:
-      KERNEL_LOCAL_NAME: Flower-Kernel
+      KERNEL_LOCAL_NAME: "Flower Kernel"
+      KERNEL_LOCALVERSION: Flower-Kernel
       KERNEL_SOURCE_BRANCH: mithorium/a14/master
 
     steps:
@@ -62,8 +63,12 @@ jobs:
 
           clone_dep kernel_devicetree_xiaomi-msm8937 \
             dts/mi8937/4.9/master dts_mi8937
+          clone_dep kernel_devicetree_xiaomi-sdm439 \
+            dts/mi439/4.9/master dts_sdm439
           clone_dep kernel_techpack_xiaomi-msm8937 \
             techpack/mi8937/4.9/master techpack_mi8937
+          clone_dep kernel_techpack_xiaomi-sdm439 \
+            techpack/mi439/4.9/master techpack_sdm439
           clone_dep kernel_techpack_audio-legacy \
             audio/4.9/mithorium/master techpack_audio
           clone_dep kernel_techpack_camera-legacy \
@@ -73,21 +78,25 @@ jobs:
           clone_dep vendor_qcom_opensource_wlan_prima \
             wlan/LA.UM.9.6.4/mithorium/master prima
 
-          rm -rf kernel/arch/arm64/boot/dts/xiaomi-msm8937
+          rm -rf kernel/arch/arm64/boot/dts/xiaomi-msm8937 kernel/arch/arm64/boot/dts/xiaomi-sdm439
           ln -s "$GITHUB_WORKSPACE/dts_mi8937" kernel/arch/arm64/boot/dts/xiaomi-msm8937
+          ln -s "$GITHUB_WORKSPACE/dts_sdm439" kernel/arch/arm64/boot/dts/xiaomi-sdm439
           mkdir -p kernel/techpack kernel/drivers/staging
-          for entry in audio-legacy camera-legacy camera-legacy-m xiaomi-msm8937; do
+          for entry in audio-legacy camera-legacy camera-legacy-m xiaomi-msm8937 xiaomi-sdm439; do
             rm -rf "kernel/techpack/$entry"
           done
           ln -s "$GITHUB_WORKSPACE/techpack_audio" kernel/techpack/audio-legacy
           ln -s "$GITHUB_WORKSPACE/techpack_camera" kernel/techpack/camera-legacy
           ln -s "$GITHUB_WORKSPACE/techpack_camera_m" kernel/techpack/camera-legacy-m
           ln -s "$GITHUB_WORKSPACE/techpack_mi8937" kernel/techpack/xiaomi-msm8937
+          ln -s "$GITHUB_WORKSPACE/techpack_sdm439" kernel/techpack/xiaomi-sdm439
           rm -rf kernel/drivers/staging/prima
           ln -s "$GITHUB_WORKSPACE/prima" kernel/drivers/staging/prima
 
           echo "KERNEL_COMMIT=$(git -C kernel rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "DTS_COMMIT=$(git -C dts_mi8937 rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "SDM439_DTS_COMMIT=$(git -C dts_sdm439 rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "SDM439_TECHPACK_COMMIT=$(git -C techpack_sdm439 rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "MiThorium source branch: $KERNEL_SOURCE_BRANCH"
           git -C kernel log -1 --oneline
 
@@ -97,9 +106,11 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          curl -fsSL https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh | bash 9339aca9339574361f32672c67601f7377b20cda
           test -L drivers/kernelsu
           test -f drivers/kernelsu/Kconfig
+          test -d techpack/xiaomi-sdm439
+          test -f techpack/xiaomi-sdm439/Kconfig
           grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig
           grep -q '^config KSU$' drivers/kernelsu/Kconfig
           grep -q '^config KSU_TAMPER_SYSCALL_TABLE$' drivers/kernelsu/Kconfig
@@ -134,7 +145,7 @@ jobs:
             --enable HZ_100 \
             --enable FTRACE \
             --set-str BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES "xiaomi-msm8937/land xiaomi-msm8937/prada xiaomi-msm8937/riva xiaomi-msm8937/rolex xiaomi-msm8937/santoni xiaomi-msm8937/ugg xiaomi-msm8937/ugglite" \
-            --set-str LOCALVERSION "-${KERNEL_LOCAL_NAME}-${{ matrix.variant }}" \
+            --set-str LOCALVERSION "-${KERNEL_LOCALVERSION}-${{ matrix.variant }}" \
             --disable LOCALVERSION_AUTO
 
           if [ "${{ matrix.ksu }}" = "true" ]; then
@@ -164,7 +175,722 @@ jobs:
           grep -q '^CONFIG_MACH_XIAOMI_UGG=y$' out/.config
           grep -q '^CONFIG_MACH_XIAOMI_UGGLITE=y$' out/.config
           grep -q '^CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y$' out/.config
-          grep -q '^CONFIG_IKCONFIG_PROC=y$' out/.config
+          grep -q '^CONFIG_IKCONFIG_PROC=y
+          grep -q '^CONFIG_PREEMPT=y$' out/.config
+          grep -q '^CONFIG_HZ_100=y$' out/.config
+
+          if [ "${{ matrix.ksu }}" = "true" ]; then
+            grep -q '^CONFIG_KSU=y$' out/.config
+            grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' out/.config
+            grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' out/.config
+            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y$' out/.config
+            grep -q '^CONFIG_KSU_HEURISTIC_IN_TREE_BUILD=y$' out/.config
+          else
+            ! grep -q '^CONFIG_KSU=y$' out/.config
+          fi
+
+          grep -q '^CONFIG_KPROBES=y
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KSU_HEURISTIC_IN_TREE_BUILD|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|PREEMPT|HZ_100|FTRACE|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build MiThorium unified DTBs and Image.gz-dtb
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
+        run: |
+          set -euxo pipefail
+          make -j"$(nproc)" O=out dtbs
+          dtb_dir="out/arch/arm64/boot/dts/xiaomi-msm8937"
+          dtb_names=(land.dtb prada.dtb riva.dtb rolex.dtb santoni.dtb ugg.dtb ugglite.dtb)
+          for dtb in "${dtb_names[@]}"; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          make -j"$(nproc)" O=out Image.gz-dtb
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zlib
+
+          dtb_dir = Path("out/arch/arm64/boot/dts/xiaomi-msm8937")
+          names = ["land.dtb", "prada.dtb", "riva.dtb", "rolex.dtb", "santoni.dtb", "ugg.dtb", "ugglite.dtb"]
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          if not dec.eof:
+              raise SystemExit("Image.gz stream is incomplete")
+          appended = dec.unused_data
+          expected = b"".join((dtb_dir / name).read_bytes() for name in names)
+          if appended != expected:
+              raise SystemExit("Appended DTB payload/order mismatch")
+          print("Validated DTB order:", ", ".join(names))
+          PY
+
+      - name: Package AnyKernel3 installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          git init anykernel
+          git -C anykernel remote add origin https://github.com/osm0sis/AnyKernel3.git
+          git -C anykernel fetch --depth=1 origin 6f88dff82b786e879b255a8e1523547c4f62d031
+          git -C anykernel checkout --detach FETCH_HEAD
+          grep -q 'AK_BASE_VERSION=20250518' anykernel/META-INF/com/google/android/updater-script
+          rm -rf anykernel/.git
+
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=prada
+          device.name6=santoni
+          device.name7=ugglite
+          device.name8=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          cp "$GITHUB_WORKSPACE/banner" anykernel/banner
+          test -s anykernel/banner
+          {
+            echo "Kernel name: Flower Kernel"
+            echo "Kernel localversion: Flower-Kernel-${{ matrix.variant }}"
+            echo "Variant: ${{ matrix.variant }}"
+            echo "Kernel source: Mi-Thorium/kernel_msm-4.9"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
+            echo "DTS source: Mi-Thorium/kernel_devicetree_xiaomi-msm8937"
+            echo "DTS commit: $DTS_COMMIT"
+            echo "SDM439 DTS commit: $SDM439_DTS_COMMIT"
+            echo "SDM439 techpack commit: $SDM439_TECHPACK_COMMIT"
+            echo "DTS order: land, prada, riva, rolex, santoni, ugg, ugglite"
+            echo "Defconfig: msm8937_defconfig + MiThorium unified fragments"
+            echo "Device family: MSM8917 / MSM8937 / MSM8940"
+            echo "Compiler: GCC 13.3.0"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+            else
+              echo "KernelSU: not integrated"
+            fi
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > anykernel/BUILD-INFO.txt
+
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -s "release/$zip_name"
+          unzip -p "release/$zip_name" banner > release/banner-check
+          cmp "$GITHUB_WORKSPACE/banner" release/banner-check
+          rm release/banner-check
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+ out/.config
+          grep -q '^CONFIG_KPROBES=y
+          grep -q '^CONFIG_PREEMPT=y$' out/.config
+          grep -q '^CONFIG_HZ_100=y$' out/.config
+
+          if [ "${{ matrix.ksu }}" = "true" ]; then
+            grep -q '^CONFIG_KSU=y$' out/.config
+            grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' out/.config
+            grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' out/.config
+            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y$' out/.config
+            grep -q '^CONFIG_KSU_HEURISTIC_IN_TREE_BUILD=y$' out/.config
+          else
+            ! grep -q '^CONFIG_KSU=y$' out/.config
+          fi
+
+          echo "=== Effective MiThorium config ==="
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KSU_HEURISTIC_IN_TREE_BUILD|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|PREEMPT|HZ_100|FTRACE|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build MiThorium unified DTBs and Image.gz-dtb
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
+        run: |
+          set -euxo pipefail
+          make -j"$(nproc)" O=out dtbs
+          dtb_dir="out/arch/arm64/boot/dts/xiaomi-msm8937"
+          dtb_names=(land.dtb prada.dtb riva.dtb rolex.dtb santoni.dtb ugg.dtb ugglite.dtb)
+          for dtb in "${dtb_names[@]}"; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          make -j"$(nproc)" O=out Image.gz-dtb
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zlib
+
+          dtb_dir = Path("out/arch/arm64/boot/dts/xiaomi-msm8937")
+          names = ["land.dtb", "prada.dtb", "riva.dtb", "rolex.dtb", "santoni.dtb", "ugg.dtb", "ugglite.dtb"]
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          if not dec.eof:
+              raise SystemExit("Image.gz stream is incomplete")
+          appended = dec.unused_data
+          expected = b"".join((dtb_dir / name).read_bytes() for name in names)
+          if appended != expected:
+              raise SystemExit("Appended DTB payload/order mismatch")
+          print("Validated DTB order:", ", ".join(names))
+          PY
+
+      - name: Package AnyKernel3 installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          git init anykernel
+          git -C anykernel remote add origin https://github.com/osm0sis/AnyKernel3.git
+          git -C anykernel fetch --depth=1 origin 6f88dff82b786e879b255a8e1523547c4f62d031
+          git -C anykernel checkout --detach FETCH_HEAD
+          grep -q 'AK_BASE_VERSION=20250518' anykernel/META-INF/com/google/android/updater-script
+          rm -rf anykernel/.git
+
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=prada
+          device.name6=santoni
+          device.name7=ugglite
+          device.name8=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          cp "$GITHUB_WORKSPACE/banner" anykernel/banner
+          test -s anykernel/banner
+          {
+            echo "Kernel name: Flower-Kernel"
+            echo "Variant: ${{ matrix.variant }}"
+            echo "Kernel source: Mi-Thorium/kernel_msm-4.9"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
+            echo "DTS source: Mi-Thorium/kernel_devicetree_xiaomi-msm8937"
+            echo "DTS commit: $DTS_COMMIT"
+            echo "DTS order: land, prada, riva, rolex, santoni, ugg, ugglite"
+            echo "Defconfig: msm8937_defconfig + MiThorium unified fragments"
+            echo "Device family: MSM8917 / MSM8937 / MSM8940"
+            echo "Compiler: GCC 13.3.0"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+            else
+              echo "KernelSU: not integrated"
+            fi
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > anykernel/BUILD-INFO.txt
+
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -s "release/$zip_name"
+          unzip -p "release/$zip_name" banner > release/banner-check
+          cmp "$GITHUB_WORKSPACE/banner" release/banner-check
+          rm release/banner-check
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+ out/.config
+          grep -q '^CONFIG_PREEMPT=y$' out/.config
+          grep -q '^CONFIG_HZ_100=y$' out/.config
+
+          if [ "${{ matrix.ksu }}" = "true" ]; then
+            grep -q '^CONFIG_KSU=y$' out/.config
+            grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' out/.config
+            grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' out/.config
+            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y$' out/.config
+            grep -q '^CONFIG_KSU_HEURISTIC_IN_TREE_BUILD=y$' out/.config
+          else
+            ! grep -q '^CONFIG_KSU=y$' out/.config
+          fi
+
+          echo "=== Effective MiThorium config ==="
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KSU_HEURISTIC_IN_TREE_BUILD|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|PREEMPT|HZ_100|FTRACE|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build MiThorium unified DTBs and Image.gz-dtb
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
+        run: |
+          set -euxo pipefail
+          make -j"$(nproc)" O=out dtbs
+          dtb_dir="out/arch/arm64/boot/dts/xiaomi-msm8937"
+          dtb_names=(land.dtb prada.dtb riva.dtb rolex.dtb santoni.dtb ugg.dtb ugglite.dtb)
+          for dtb in "${dtb_names[@]}"; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          make -j"$(nproc)" O=out Image.gz-dtb
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zlib
+
+          dtb_dir = Path("out/arch/arm64/boot/dts/xiaomi-msm8937")
+          names = ["land.dtb", "prada.dtb", "riva.dtb", "rolex.dtb", "santoni.dtb", "ugg.dtb", "ugglite.dtb"]
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          if not dec.eof:
+              raise SystemExit("Image.gz stream is incomplete")
+          appended = dec.unused_data
+          expected = b"".join((dtb_dir / name).read_bytes() for name in names)
+          if appended != expected:
+              raise SystemExit("Appended DTB payload/order mismatch")
+          print("Validated DTB order:", ", ".join(names))
+          PY
+
+      - name: Package AnyKernel3 installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          git init anykernel
+          git -C anykernel remote add origin https://github.com/osm0sis/AnyKernel3.git
+          git -C anykernel fetch --depth=1 origin 6f88dff82b786e879b255a8e1523547c4f62d031
+          git -C anykernel checkout --detach FETCH_HEAD
+          grep -q 'AK_BASE_VERSION=20250518' anykernel/META-INF/com/google/android/updater-script
+          rm -rf anykernel/.git
+
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=prada
+          device.name6=santoni
+          device.name7=ugglite
+          device.name8=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          cp "$GITHUB_WORKSPACE/banner" anykernel/banner
+          test -s anykernel/banner
+          {
+            echo "Kernel name: Flower-Kernel"
+            echo "Variant: ${{ matrix.variant }}"
+            echo "Kernel source: Mi-Thorium/kernel_msm-4.9"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
+            echo "DTS source: Mi-Thorium/kernel_devicetree_xiaomi-msm8937"
+            echo "DTS commit: $DTS_COMMIT"
+            echo "DTS order: land, prada, riva, rolex, santoni, ugg, ugglite"
+            echo "Defconfig: msm8937_defconfig + MiThorium unified fragments"
+            echo "Device family: MSM8917 / MSM8937 / MSM8940"
+            echo "Compiler: GCC 13.3.0"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+            else
+              echo "KernelSU: not integrated"
+            fi
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > anykernel/BUILD-INFO.txt
+
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -s "release/$zip_name"
+          unzip -p "release/$zip_name" banner > release/banner-check
+          cmp "$GITHUB_WORKSPACE/banner" release/banner-check
+          rm release/banner-check
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+ out/.config
+          echo "=== Effective MiThorium config ==="
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KSU_HEURISTIC_IN_TREE_BUILD|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|PREEMPT|HZ_100|FTRACE|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build MiThorium unified DTBs and Image.gz-dtb
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
+        run: |
+          set -euxo pipefail
+          make -j"$(nproc)" O=out dtbs
+          dtb_dir="out/arch/arm64/boot/dts/xiaomi-msm8937"
+          dtb_names=(land.dtb prada.dtb riva.dtb rolex.dtb santoni.dtb ugg.dtb ugglite.dtb)
+          for dtb in "${dtb_names[@]}"; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          make -j"$(nproc)" O=out Image.gz-dtb
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zlib
+
+          dtb_dir = Path("out/arch/arm64/boot/dts/xiaomi-msm8937")
+          names = ["land.dtb", "prada.dtb", "riva.dtb", "rolex.dtb", "santoni.dtb", "ugg.dtb", "ugglite.dtb"]
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          if not dec.eof:
+              raise SystemExit("Image.gz stream is incomplete")
+          appended = dec.unused_data
+          expected = b"".join((dtb_dir / name).read_bytes() for name in names)
+          if appended != expected:
+              raise SystemExit("Appended DTB payload/order mismatch")
+          print("Validated DTB order:", ", ".join(names))
+          PY
+
+      - name: Package AnyKernel3 installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          git init anykernel
+          git -C anykernel remote add origin https://github.com/osm0sis/AnyKernel3.git
+          git -C anykernel fetch --depth=1 origin 6f88dff82b786e879b255a8e1523547c4f62d031
+          git -C anykernel checkout --detach FETCH_HEAD
+          grep -q 'AK_BASE_VERSION=20250518' anykernel/META-INF/com/google/android/updater-script
+          rm -rf anykernel/.git
+
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=prada
+          device.name6=santoni
+          device.name7=ugglite
+          device.name8=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          cp "$GITHUB_WORKSPACE/banner" anykernel/banner
+          test -s anykernel/banner
+          {
+            echo "Kernel name: Flower Kernel"
+            echo "Kernel localversion: Flower-Kernel-${{ matrix.variant }}"
+            echo "Variant: ${{ matrix.variant }}"
+            echo "Kernel source: Mi-Thorium/kernel_msm-4.9"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
+            echo "DTS source: Mi-Thorium/kernel_devicetree_xiaomi-msm8937"
+            echo "DTS commit: $DTS_COMMIT"
+            echo "SDM439 DTS commit: $SDM439_DTS_COMMIT"
+            echo "SDM439 techpack commit: $SDM439_TECHPACK_COMMIT"
+            echo "DTS order: land, prada, riva, rolex, santoni, ugg, ugglite"
+            echo "Defconfig: msm8937_defconfig + MiThorium unified fragments"
+            echo "Device family: MSM8917 / MSM8937 / MSM8940"
+            echo "Compiler: GCC 13.3.0"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+            else
+              echo "KernelSU: not integrated"
+            fi
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > anykernel/BUILD-INFO.txt
+
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -s "release/$zip_name"
+          unzip -p "release/$zip_name" banner > release/banner-check
+          cmp "$GITHUB_WORKSPACE/banner" release/banner-check
+          rm release/banner-check
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+ out/.config
+          grep -q '^CONFIG_KPROBES=y
+          grep -q '^CONFIG_PREEMPT=y$' out/.config
+          grep -q '^CONFIG_HZ_100=y$' out/.config
+
+          if [ "${{ matrix.ksu }}" = "true" ]; then
+            grep -q '^CONFIG_KSU=y$' out/.config
+            grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y$' out/.config
+            grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y$' out/.config
+            grep -q '^CONFIG_KSU_FEATURE_ADBROOT=y$' out/.config
+            grep -q '^CONFIG_KSU_HEURISTIC_IN_TREE_BUILD=y$' out/.config
+          else
+            ! grep -q '^CONFIG_KSU=y$' out/.config
+          fi
+
+          echo "=== Effective MiThorium config ==="
+          grep -E '^(CONFIG_(KSU|KSU_TAMPER_SYSCALL_TABLE|KSU_LSM_SECURITY_HOOKS|KSU_FEATURE_ADBROOT|KSU_HEURISTIC_IN_TREE_BUILD|KPROBES|KALLSYMS|KALLSYMS_ALL|IKCONFIG|IKCONFIG_PROC|PREEMPT|HZ_100|FTRACE|ARCH_MSM8937|ARCH_MSM8917|ARCH_MSM8940|MACH_XIAOMI|BUILD_ARM64_APPENDED_DTB_IMAGE))=' out/.config || true
+
+      - name: Build MiThorium unified DTBs and Image.gz-dtb
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+        shell: bash
+        run: |
+          set -euxo pipefail
+          make -j"$(nproc)" O=out dtbs
+          dtb_dir="out/arch/arm64/boot/dts/xiaomi-msm8937"
+          dtb_names=(land.dtb prada.dtb riva.dtb rolex.dtb santoni.dtb ugg.dtb ugglite.dtb)
+          for dtb in "${dtb_names[@]}"; do
+            test -s "$dtb_dir/$dtb"
+          done
+
+          make -j"$(nproc)" O=out Image.gz-dtb
+          test -s out/arch/arm64/boot/Image.gz-dtb
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import zlib
+
+          dtb_dir = Path("out/arch/arm64/boot/dts/xiaomi-msm8937")
+          names = ["land.dtb", "prada.dtb", "riva.dtb", "rolex.dtb", "santoni.dtb", "ugg.dtb", "ugglite.dtb"]
+          image = Path("out/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          dec = zlib.decompressobj(31)
+          dec.decompress(image)
+          if not dec.eof:
+              raise SystemExit("Image.gz stream is incomplete")
+          appended = dec.unused_data
+          expected = b"".join((dtb_dir / name).read_bytes() for name in names)
+          if appended != expected:
+              raise SystemExit("Appended DTB payload/order mismatch")
+          print("Validated DTB order:", ", ".join(names))
+          PY
+
+      - name: Package AnyKernel3 installer
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          git init anykernel
+          git -C anykernel remote add origin https://github.com/osm0sis/AnyKernel3.git
+          git -C anykernel fetch --depth=1 origin 6f88dff82b786e879b255a8e1523547c4f62d031
+          git -C anykernel checkout --detach FETCH_HEAD
+          grep -q 'AK_BASE_VERSION=20250518' anykernel/META-INF/com/google/android/updater-script
+          rm -rf anykernel/.git
+
+          cat > anykernel/anykernel.sh <<'AKSCRIPT'
+          ### AnyKernel3 installer for Flower Kernel - Mi8937 family
+          properties() { '
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=rolex
+          device.name2=riva
+          device.name3=rova
+          device.name4=land
+          device.name5=prada
+          device.name6=santoni
+          device.name7=ugglite
+          device.name8=ugg
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 "$RAMDISK"/*;
+          set_perm_recursive 0 0 750 750 "$RAMDISK"/init* "$RAMDISK"/sbin;
+          }
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          AKSCRIPT
+
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
+          cp "$GITHUB_WORKSPACE/banner" anykernel/banner
+          test -s anykernel/banner
+          {
+            echo "Kernel name: Flower-Kernel"
+            echo "Variant: ${{ matrix.variant }}"
+            echo "Kernel source: Mi-Thorium/kernel_msm-4.9"
+            echo "Source branch: $KERNEL_SOURCE_BRANCH"
+            echo "Source commit: $KERNEL_COMMIT"
+            echo "DTS source: Mi-Thorium/kernel_devicetree_xiaomi-msm8937"
+            echo "DTS commit: $DTS_COMMIT"
+            echo "DTS order: land, prada, riva, rolex, santoni, ugg, ugglite"
+            echo "Defconfig: msm8937_defconfig + MiThorium unified fragments"
+            echo "Device family: MSM8917 / MSM8937 / MSM8940"
+            echo "Compiler: GCC 13.3.0"
+            echo "KernelSU: ${{ matrix.ksu }}"
+            if [ "${{ matrix.ksu }}" = "true" ]; then
+              echo "KernelSU source: backslashxx/KernelSU"
+              echo "KernelSU commit: $KSU_COMMIT"
+            else
+              echo "KernelSU: not integrated"
+            fi
+            printf 'Kernel version: '
+            make -s -C kernel O=out ARCH=arm64 \
+              CROSS_COMPILE=aarch64-linux-gnu- \
+              CROSS_COMPILE_ARM32=arm-linux-gnueabi- kernelversion
+          } > anykernel/BUILD-INFO.txt
+
+          zip_name="Flower-Kernel-Mi8937-${{ matrix.variant }}.zip"
+          (cd anykernel && zip -qr "../release/$zip_name" .)
+          test -s "release/$zip_name"
+          unzip -p "release/$zip_name" banner > release/banner-check
+          cmp "$GITHUB_WORKSPACE/banner" release/banner-check
+          rm release/banner-check
+          cp kernel/out/.config "release/kernel-${{ matrix.variant }}.config"
+          cp anykernel/BUILD-INFO.txt "release/BUILD-INFO-${{ matrix.variant }}.txt"
+          ls -lh release/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flower-Kernel-Mi8937-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+ out/.config
           grep -q '^CONFIG_PREEMPT=y$' out/.config
           grep -q '^CONFIG_HZ_100=y$' out/.config
 
